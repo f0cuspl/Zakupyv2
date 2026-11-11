@@ -209,6 +209,20 @@ body.lock{overflow:hidden}
 .nvrow{display:grid;grid-template-columns:repeat(4,1fr);gap:5px}
 .nvl{font-size:11.5px;font-weight:600;color:var(--muted);margin-bottom:-3px}
 @media (max-width:380px){.ingrow{grid-template-columns:1fr 58px 26px}.ingrow .iM{grid-column:1/3;grid-row:2}}
+
+.btn.sm{padding:7px 10px;font-size:13.5px}
+.offbtns{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.ingbtns{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.offp{margin-top:8px;border:1.5px solid #9ccfe9;background:#f3fafe;border-radius:10px;padding:8px;display:grid;gap:6px}
+.offh{display:flex;justify-content:space-between;align-items:center;font-size:13.5px;color:var(--navy)}
+.offmsg{font-size:13.5px;color:var(--muted)}
+.offman{display:grid;grid-template-columns:1fr auto;gap:6px}
+.offman input{font:inherit;font-size:16px;border:1.5px solid #b9cbe2;border-radius:10px;padding:8px 10px;min-width:0}
+.offr{text-align:left;background:#fff;border:1.5px solid var(--line);border-radius:9px;padding:8px 10px}
+.offr:active{border-color:var(--sky)}
+.offn{font-weight:700;font-size:14px;color:var(--ink)}.offn span{font-weight:500;color:var(--muted)}
+.offv{font-size:12.5px;color:var(--muted);margin-top:2px}.offv b{color:var(--navy)}
+.offsrc{font-size:11.5px;color:var(--muted)}
 textarea.copy{position:fixed;left:-9999px}
 @media (max-width:380px){.day{font-size:16px}.day small{font-size:10.5px}.actions{grid-template-columns:1fr 1fr}.actions .switch{grid-column:1/-1}}
 </style>
@@ -244,6 +258,7 @@ textarea.copy{position:fixed;left:-9999px}
   </div>
 </div>
 <div id="sheet"></div>
+<input type="file" id="scanFile" accept="image/*" capture="environment" hidden>
 <div class="toast" id="toast"></div>
 <script src="config.js"></script>
 <script>
@@ -668,7 +683,7 @@ function renderRecipes(){
 /* ---------- formularz przepisu ---------- */
 function openRecipeForm(id){
   const r=id?recipes.find(x=>x.id===id):null;
-  rf={id:r?r.id:null, ti:r?r.ti:"", nm:r?r.nm:"Obiad", de:r?r.de:"",
+  rf={off:null, id:r?r.id:null, ti:r?r.ti:"", nm:r?r.nm:"Obiad", de:r?r.de:"",
       it:r?r.it.map(x=>Object.assign({},x)):[{n:"",g:"",m:""}], saving:false, err:""};
   document.body.classList.add("lock"); renderRecipeForm();
 }
@@ -706,10 +721,11 @@ function renderRecipeForm(focusSel){
     if(isNew){ const nv=x.nv||["","","",""];
       h+=`<div class="newp"><div class="np-t">Nowy produkt – podaj dział i (opcjonalnie) wartości na 100 g:</div>
         <select class="iC">${CATS.map((c,ci)=>`<option value="${ci}" ${(x.c!=null?+x.c:CATS.length-1)===ci?"selected":""}>${c}</option>`).join("")}</select>
+        <div class="offbtns"><button class="btn sm" type="button" data-offsearch="${i}">🔍 Szukaj w internecie</button><button class="btn sm" type="button" data-scan="${i}">📷 Skanuj kod</button></div>
         <div class="nvrow nvl"><span>kcal</span><span>białko g</span><span>tłuszcz g</span><span>węgl. g</span></div><div class="nvrow"><input class="iK" inputmode="decimal" value="${esc(nv[0])}" placeholder="kcal"><input class="iB" inputmode="decimal" value="${esc(nv[1])}" placeholder="B g"><input class="iT" inputmode="decimal" value="${esc(nv[2])}" placeholder="T g"><input class="iW" inputmode="decimal" value="${esc(nv[3])}" placeholder="W g"></div></div>`; }
-    h+=`</div>`;
+    h+=offPanel(i)+`</div>`;
   });
-  h+=`</div><button class="btn" id="addIng" type="button">＋ Składnik</button>
+  h+=`</div><div class="ingbtns"><button class="btn" id="addIng" type="button">＋ Składnik</button><button class="btn" type="button" data-scan="-1">📷 Dodaj ze skanu kodu</button></div>
       <div class="fl">Razem (1 porcja)</div>${macroRow(k,true,!full)}
       <label class="fl">Przygotowanie<textarea id="rfDe" rows="5" placeholder="Jak przygotować…">${esc(rf.de)}</textarea></label>
       ${rf.err?`<div class="lerr">${esc(rf.err)}</div>`:""}
@@ -740,6 +756,104 @@ async function deleteRecipe(id){
   try{ const j=await api("delRecipe",{id}); if(!j.ok) throw new Error(j.error);
     recipes=j.recipes; save("dieta.recipes",recipes); buildRecipes(); delAsk=null; render(); toast("Usunięto przepis");
   }catch(e){ if(e.message!=="auth") toast("Nie udało się usunąć – brak internetu?"); }
+}
+
+/* ---------- Open Food Facts: wyszukiwanie i skanowanie ---------- */
+const OFF_F="code,product_name,product_name_pl,brands,quantity,nutriments";
+function offParse(list){
+  return (list||[]).map(p=>{
+    const n=p.nutriments||{}; const num=v=>{const x=parseFloat(v);return isFinite(x)?x:null};
+    let kc=num(n["energy-kcal_100g"]); if(kc==null&&num(n.energy_100g)!=null) kc=num(n.energy_100g)/4.184;
+    const nv=[kc,num(n.proteins_100g),num(n.fat_100g),num(n.carbohydrates_100g)];
+    if(nv.every(x=>x==null)) return null;
+    return {code:p.code, name:(p.product_name_pl||p.product_name||"").trim()||"(bez nazwy)", brand:(p.brands||"").split(",")[0].trim(), qty:p.quantity||"",
+      nv:nv.map(x=>x==null?0:Math.round(x*10)/10), partial:nv.some(x=>x==null)};
+  }).filter(Boolean);
+}
+async function offDirect(url){ const r=await fetch(url); if(r.status===429) throw new Error("limit"); if(!r.ok) throw new Error("http"); return r.json(); }
+async function offSearch(q){
+  try{
+    for(const host of ["pl","world"]){
+      const j=await offDirect(`https://${host}.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(q)}&search_simple=1&action=process&json=1&page_size=15&fields=${OFF_F}`);
+      if(j.products&&j.products.length) return offParse(j.products);
+    }
+    return [];
+  }catch(e){
+    if(e.message==="limit") throw new Error("Za dużo wyszukiwań – odczekaj minutę.");
+    const j=await api("off",{q}); if(!j.ok) throw new Error(j.error||"Brak połączenia z bazą produktów."); return offParse(j.products);
+  }
+}
+async function offCode(code){
+  try{
+    const j=await offDirect(`https://world.openfoodfacts.org/api/v2/product/${code}.json?fields=${OFF_F}`);
+    return j&&j.product?offParse([Object.assign({code},j.product)]):[];
+  }catch(e){
+    const j=await api("off",{code}); if(!j.ok) throw new Error(j.error||"Brak połączenia z bazą produktów."); return offParse(j.products);
+  }
+}
+async function offRun(i,mode,val){
+  rf.off={i,loading:true,mode,val,res:[],err:""}; renderRecipeForm();
+  try{
+    const res = mode==="code"? await offCode(val) : await offSearch(val);
+    if(!rf||!rf.off) return;
+    rf.off.res=res; rf.off.loading=false;
+    if(!res.length) rf.off.err = mode==="code" ? `Kodu ${val} nie ma w bazie Open Food Facts. Wpisz wartości ręcznie.` : "Nic nie znaleziono. Spróbuj krótszej nazwy albo zeskanuj kod.";
+  }catch(e){ if(!rf||!rf.off) return; rf.off.loading=false; rf.off.err=e.message==="auth"?"":(e.message||"Błąd"); }
+  renderRecipeForm();
+}
+let zxP=null;
+function loadZXing(){
+  if(window.ZXing) return Promise.resolve();
+  if(!zxP) zxP=new Promise((res,rej)=>{const s=document.createElement("script");s.src="https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js";s.onload=res;s.onerror=()=>{zxP=null;rej(new Error("Nie udało się wczytać czytnika kodów."))};document.head.appendChild(s)});
+  return zxP;
+}
+async function decodeBarcode(file){
+  const img=await new Promise((res,rej)=>{const u=URL.createObjectURL(file);const im=new Image();im.onload=()=>res(im);im.onerror=()=>rej(new Error("Nie można otworzyć zdjęcia."));im.src=u});
+  const sc=Math.min(1,1400/Math.max(img.naturalWidth,img.naturalHeight));
+  const cv=document.createElement("canvas"); cv.width=Math.round(img.naturalWidth*sc); cv.height=Math.round(img.naturalHeight*sc);
+  cv.getContext("2d").drawImage(img,0,0,cv.width,cv.height);
+  if("BarcodeDetector" in window){
+    try{ const bd=new BarcodeDetector({formats:["ean_13","ean_8","upc_a","upc_e"]}); const r=await bd.detect(cv); if(r.length) return r[0].rawValue; }catch(e){}
+  }
+  await loadZXing();
+  const hints=new Map(); const F=ZXing.BarcodeFormat;
+  hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS,[F.EAN_13,F.EAN_8,F.UPC_A,F.UPC_E]); hints.set(ZXing.DecodeHintType.TRY_HARDER,true);
+  const reader=new ZXing.BrowserMultiFormatReader(hints);
+  try{ const r=await reader.decodeFromImageUrl(cv.toDataURL("image/jpeg",0.92)); return r.getText(); }
+  catch(e){ return null; }
+}
+let scanTarget=null;
+function startScan(i){ readForm(); scanTarget=i; const f=$("scanFile"); f.value=""; f.click(); }
+async function onScanFile(file){
+  if(!rf||!file) return;
+  let i=scanTarget;
+  if(i===-1){ rf.it=rf.it.filter(x=>x.n||x.g); rf.it.push({n:"",g:"",m:""}); i=rf.it.length-1; }
+  rf.off={i,loading:true,mode:"scan",res:[],err:""}; renderRecipeForm();
+  try{
+    const code=await decodeBarcode(file);
+    if(!rf) return;
+    if(!code){ rf.off={i,loading:false,mode:"manual",res:[],err:"Nie udało się odczytać kodu ze zdjęcia. Zrób zdjęcie bliżej i ostrzej albo wpisz cyfry spod kodu:"}; renderRecipeForm(".offcode"); return; }
+    await offRun(i,"code",code);
+  }catch(e){ if(rf){ rf.off={i,loading:false,mode:"manual",res:[],err:e.message+" Możesz wpisać cyfry spod kodu:"}; renderRecipeForm(); } }
+}
+function offPanel(i){
+  const o=rf.off; if(!o||o.i!==i) return "";
+  let h=`<div class="offp"><div class="offh"><b>${o.mode==="search"?"Wyniki dla: "+esc(o.val):o.mode==="code"?"Kod: "+esc(o.val):"Skanowanie"}</b><button class="del" data-offclose="1" aria-label="Zamknij">×</button></div>`;
+  if(o.loading) h+=`<div class="offmsg">${o.mode==="scan"?"Odczytuję kod…":"Szukam w Open Food Facts…"}</div>`;
+  if(o.err) h+=`<div class="offmsg">${esc(o.err)}</div>`;
+  if(o.mode==="manual"||(o.mode==="code"&&!o.loading&&!o.res.length))
+    h+=`<div class="offman"><input class="offcode" inputmode="numeric" placeholder="np. 5900259000002" value="${o.mode==="code"?esc(o.val):""}"><button class="btn" data-offcode="${i}">Szukaj kodu</button></div>`;
+  o.res.forEach((r,k)=>{ h+=`<button class="offr" data-offpick="${k}"><div class="offn">${esc(r.name)}${r.brand?` <span>· ${esc(r.brand)}</span>`:""}${r.qty?` <span>· ${esc(r.qty)}</span>`:""}</div>
+    <div class="offv">na 100 g: <b>${Math.round(r.nv[0])} kcal</b> · B ${fmtNum(r.nv[1])} · T ${fmtNum(r.nv[2])} · W ${fmtNum(r.nv[3])}${r.partial?" · <i>niepełne dane</i>":""}</div></button>`; });
+  if(o.res.length) h+=`<div class="offsrc">Dane: Open Food Facts (baza tworzona przez użytkowników) – sprawdź z etykietą.</div>`;
+  return h+`</div>`;
+}
+function offPick(k){
+  readForm(); const o=rf.off, r=o.res[k], x=rf.it[o.i];
+  x.nv=r.nv.slice();
+  if(!x.n){ x.n=r.name+(r.brand?" "+r.brand:""); }
+  if(x.c==null) x.c=CATS.length-1;
+  rf.off=null; renderRecipeForm(`.ing[data-i="${o.i}"] .iG`); toast("Uzupełniono wartości na 100 g");
 }
 
 /* ---------- render ---------- */
@@ -784,6 +898,11 @@ document.addEventListener("click",async e=>{
     if(b.id==="addIng"){readForm();rf.it.push({n:"",g:"",m:""});renderRecipeForm(`.ing[data-i="${rf.it.length-1}"] .iN`);return}
     if(b.dataset.rmi){readForm();rf.it.splice(+b.dataset.rmi,1);if(!rf.it.length)rf.it.push({n:"",g:"",m:""});renderRecipeForm();return}
     if(b.id==="saveRc"){saveRecipe();return}
+    if(b.dataset.scan!=null){startScan(+b.dataset.scan);return}
+    if(b.dataset.offsearch!=null){readForm();const i=+b.dataset.offsearch,q=rf.it[i].n;if(q)offRun(i,"search",q);return}
+    if(b.dataset.offcode!=null){const v=(document.querySelector(".offcode")||{}).value||"";const c=v.replace(/\D/g,"");readForm();if(c.length>=8)offRun(+b.dataset.offcode,"code",c);else{rf.off.err="Kod ma zwykle 8 lub 13 cyfr.";renderRecipeForm(".offcode")}return}
+    if(b.dataset.offpick!=null){offPick(+b.dataset.offpick);return}
+    if(b.dataset.offclose){readForm();rf.off=null;renderRecipeForm();return}
     return;
   }
   if(b.dataset.swap){const [w,n,i]=b.dataset.swap.split("|");openSwap(w,+n,+i);return}
@@ -824,6 +943,8 @@ document.addEventListener("input",e=>{
   if(e.target.id==="rq"){rq=e.target.value.toLowerCase();renderRecipes();const q=$("rq");q.focus();q.setSelectionRange(q.value.length,q.value.length);return}
 });
 document.addEventListener("change",e=>{
+  if(e.target.id==="scanFile"){onScanFile(e.target.files&&e.target.files[0]);return}
+  if(e.target.classList&&e.target.classList.contains("offcode")) return;
   if(e.target.id==="hide"){st.hideDone=e.target.checked;render();return}
   if(rf&&e.target.closest&&e.target.closest(".ing")){
     setTimeout(()=>{ if(!rf) return;
